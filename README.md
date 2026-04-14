@@ -13,7 +13,7 @@
 | **Prérequis** | `01_EDA.ipynb` (Analyse Exploratoire des Données) |
 | **Dataset d'entrée** | `macro_market_merged.csv` (produit par `01_EDA.ipynb`) |
 | **Période couverte** | Janvier 2015 – Janvier 2025 (~10 ans de données journalières) |
-| **Objectif** | Prédire le taux EUR/TND du lendemain (horizon T+1) |
+| **Objectif** | Prédire le taux EUR/TND  |
 | **Graine aléatoire** | `SEED = 42` (reproductibilité garantie) |
 
 ---
@@ -193,7 +193,7 @@ Architecture de gradient boosting similaire à XGBoost mais avec une stratégie 
 
 ---
 
-## 🔬 Feature Engineering — Détail
+##  Feature Engineering — Détail
 
 ### Variables sources (colonnes de base)
 
@@ -240,15 +240,20 @@ La **MAE est la métrique principale** de sélection des modèles car elle est d
 
 Le tableau suivant présente les performances de tous les modèles, avant et après optimisation des hyperparamètres :
 
-| Modèle | MAE (TND) | RMSE (TND) | MAPE (%) | Δ vs Baseline |
+| Modèle | MAE (TND) | RMSE (TND) | MAPE (%) | Δ vs Baseline (%) |
 |---|---|---|---|---|
-| Baseline naïve | référence | référence | référence | 0 % |
-| Ridge Regression | faible amélioration | — | — | faible gain |
-| Random Forest | amélioration modérée | — | — | gain modéré |
-| XGBoost | forte amélioration | — | — | fort gain |
-| XGBoost (optimisé) | meilleure | — | — | gain additionnel |
-| LightGBM | forte amélioration | — | — | fort gain |
-| **LightGBM (optimisé)** | **meilleure** | **meilleure** | **meilleure** | **gain maximal** |
+| Baseline naïve | 0.009811 | 0.017180 | 0.293482|  0.00 |
+| Ridge Regression | 0.001658 | 0.002368  |0.049618 |  83.10 |
+| Random Forest | 0.008924 | 0.012363 | 0.266648 | 9.03|
+| XGBoost |  0.005195|0.007172 |0.155133 | 47.05 |
+| XGBoost (optimisé) | 0.004813 |0.006684|0.143652 | 50.94 |
+| LightGBM | 0.005577 | 0.007510 | 0.166530  | 43.15 |
+| LightGBM (optimisé) | 0.004929 | 0.006775 | 0.147136 | 49.76 |
+
+> Meilleur modèle : Ridge
+   MAE  : 0.00166 TND
+   MAPE : 0.0496 %
+   Amélioration vs baseline : 83.1%
 
 > Les valeurs numériques exactes sont affichées dans la cellule 35 du notebook (`BILAN COMPLET — TOUS LES MODÈLES`). Les résultats dépendent de la date d'exécution car les données EUR/TND sont téléchargées en temps réel.
 
