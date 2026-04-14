@@ -1,352 +1,445 @@
-# Prédiction du taux de change EUR/TND
+#  Prévision du Taux de Change EUR/TND — Projet Machine Learning
 
-> Pipeline de machine learning pour prédire le taux de change Euro / Dinar Tunisien à partir d'indicateurs macroéconomiques tunisiens et de facteurs de marché internationaux.
-
----
-
-## Table des matières
-
-- [Vue d'ensemble](#vue-densemble)
-- [Résultats](#résultats)
-- [Structure du projet](#structure-du-projet)
-- [Sources de données](#sources-de-données)
-- [Pipeline](#pipeline)
-- [Ingénierie des features](#ingénierie-des-features)
-- [Modèle](#modèle)
-- [Validation walk-forward](#validation-walk-forward)
-- [Comment exécuter](#comment-exécuter)
-- [Fichiers générés](#fichiers-générés)
-- [Interprétation et limites](#interprétation-et-limites)
-- [Dépendances](#dépendances)
+> **Prédiction du taux Euro / Dinar Tunisien du lendemain à l'aide d'indicateurs macroéconomiques et d'algorithmes d'ensemble**
 
 ---
 
-## Vue d'ensemble
+##  Auteurs & Contexte
 
-Ce projet construit un modèle de prédiction quotidienne du taux EUR/TND en combinant :
-
-- **Données macroéconomiques tunisiennes** (balance commerciale, PIB, taux d'intérêt directeur, inflation) issues de la BCT / INS et interpolées à fréquence journalière
-- **Facteurs de marché internationaux** (EUR/USD, Brent, or, EUR/GBP, rendement US 10 ans, MSCI EM) récupérés via `yfinance`
-
-Le modèle prédit le taux EUR/TND du lendemain et fournit un intervalle de confiance dérivé de la distribution empirique des résidus sur l'ensemble de test.
-
----
-
-## Résultats
-
-### Évaluation train/test unique (80/20 chronologique)
-
-| Métrique | Modèle | Naïf (lag-1) | Amélioration |
-|----------|--------|--------------|--------------|
-| MAE      | 0,00512 TND | 0,00981 TND | **-47,8%** |
-| RMSE     | 0,00695 TND | 0,01718 TND | **-59,5%** |
-| MAPE     | 0,153% | — | — |
-
-### Validation walk-forward (84 fenêtres glissantes, 2018–2024)
-
-| Année | MAE | MAPE |
-|-------|-----|------|
-| 2018  | 0,04391 | 1,38% |
-| 2019  | 0,05264 | 1,58% |
-| 2020  | 0,02504 | 0,80% |
-| 2021  | 0,00365 | 0,11% |
-| 2022  | 0,00445 | 0,14% |
-| 2023  | 0,00521 | 0,16% |
-| 2024  | 0,00246 | 0,07% |
-
-> Le MAE élevé en 2018–2019 reflète la période de démarrage à froid (seulement 3 ans de données d'entraînement disponibles). À partir de 2021, le modèle fonctionne dans un régime stable avec un MAPE inférieur à 0,16%, en amélioration continue au fil des années.
+| Champ | Détail |
+|---|---|
+| **Auteurs** | Ben Selma Hibe & Cherchir Aya |
+| **Notebook** | `02_Modeling.ipynb` — Préprocessing, Feature Engineering & Modélisation |
+| **Prérequis** | `01_EDA.ipynb` (Analyse Exploratoire des Données) |
+| **Dataset d'entrée** | `macro_market_merged.csv` (produit par `01_EDA.ipynb`) |
+| **Période couverte** | Janvier 2015 – Janvier 2025 (~10 ans de données journalières) |
+| **Objectif** | Prédire le taux EUR/TND du lendemain (horizon T+1) |
+| **Graine aléatoire** | `SEED = 42` (reproductibilité garantie) |
 
 ---
 
-## Structure du projet
+##  Problématique
+
+Le Dinar Tunisien (TND) est une devise dont le taux de change est influencé à la fois par des facteurs **macroéconomiques locaux** (balance commerciale, taux d'intérêt, inflation) et par des **indicateurs de marché internationaux** (EUR/USD, cours du Brent, prix de l'or). Anticiper ces fluctuations présente un intérêt direct pour les acteurs économiques (importateurs, exportateurs, institutions financières).
+
+Ce projet formule la prédiction comme un **problème de régression supervisée sur séries temporelles** : à partir des données disponibles jusqu'au jour J, prédire le taux EUR/TND du jour J+1.
+
+---
+
+##  Structure du Projet
 
 ```
-eurtnd-prediction/
-│
-├── data/
-│   ├── balance_commerciale_daily.xlsx   # Balance commerciale tunisienne (interpolation journalière)
-│   ├── PIB_daily.xlsx                   # PIB tunisien (interpolation journalière)
-│   ├── taux_interet_daily.xlsx          # Taux directeur BCT (journalier)
-│   └── inflation_daily.xlsx             # Indice d'inflation journalier
-│
-├── outputs/
-│   ├── macro_merged.xlsx                # Étape 1 — 4 sources macro fusionnées
-│   ├── macro_market_merged.csv          # Étape 2 — macro + yfinance fusionnés
-│   ├── dataset_features.csv             # Étape 3 — matrice de features complète avec cible
-│   ├── predictions.csv                  # Étape 4 — prédictions sur l'ensemble de test
-│   ├── forecast_tomorrow.csv            # Étape 5A — prévision J+1
-│   ├── walkforward_predictions.csv      # Étape 5B — toutes les prédictions walk-forward
-│   └── walkforward_yearly.csv           # Étape 5B — performance annuelle détaillée
-│
-├── step2_yfinance_merge_fixed.py        # Récupération et fusion des données de marché
-├── step3_target_features_fixed.py       # Ajout de la cible EUR/TND + ingénierie des features
-├── step4_model.py                       # Entraînement XGBoost + évaluation
-├── step5a_predict_tomorrow.py           # Prévision J+1 avec intervalle de confiance
-├── step5b_walkforward.py                # Validation walk-forward glissante
-└── README.md
+.
+├── data
+    └──  Fichiers Excel des données collectées auprès de l’INS et de la BCT → données quotidiennes → fusionnées
+├── drafts
+    └── notbooks_daily_data
+        └──draft2balance.ipynb
+        └──draft2inflation.ipynb
+        └──draft2pib
+        └──draft2taux_interet.ipynb 
+    └── notbooks_daily_donnees_initiaux
+          └──Initial_EDA.ipynb
+          └──Initial_Modeling.ipynb
+          └──Initial_Modeling_draft.ipynb 
+├── notebooks
+    └──01_EDA.ipynb          
+    └──02_Modeling.ipynb   # ← Notebook principal
+├── presentation_EURTND.pptx                 
+├── README.md           
+└── requirements.txt                      
+                              
 ```
 
 ---
 
-## Sources de données
+##  Pipeline Complet
 
-### Données macroéconomiques (Tunisie)
-
-| Variable | Source | Fréquence brute | Couverture |
-|----------|--------|-----------------|------------|
-| Balance commerciale | BCT / INS | Mensuelle | 2015–2025 |
-| PIB | BCT / INS | Trimestrielle | 2015–2025 |
-| Taux d'intérêt directeur | BCT | Mensuelle | 2015–2025 |
-| Inflation | INS | Mensuelle | 2015–2025 |
-
-Les données brutes ont été interpolées à fréquence journalière par interpolation linéaire puis forward-fill. Les quatre séries sont alignées sur un index journalier commun du **01/01/2015 au 01/01/2025** (3 654 lignes).
-
-### Données de marché (yfinance)
-
-| Ticker | Variable | Justification économique |
-|--------|----------|--------------------------|
-| `EURUSD=X` | Cours EUR/USD | Facteur direct — le TND est géré par rapport à l'EUR |
-| `BZ=F` | Brent (contrat front) | La Tunisie est importatrice nette de pétrole |
-| `GC=F` | Or (USD/oz) | Indicateur de force du dollar |
-| `EURGBP=X` | Cours EUR/GBP | Jauge de la force de l'EUR |
-| `^TNX` | Rendement US 10 ans | Appétit mondial pour le risque |
-| `EEM` | iShares MSCI EM ETF | Sentiment envers les marchés émergents |
-| `EURTND=X` | **EUR/TND** | **Variable cible** |
-
-> Remarque : `DX-Y.NYB` (DXY) était indisponible sur yfinance et a été remplacé par `dxy_proxy = 1 / eur_usd`, qui capture le même signal de force du dollar (l'EUR représente ~57% du vrai DXY).
-
-Les données de marché couvrent uniquement les jours de bourse. Les gaps de week-ends et jours fériés sont comblés par forward-fill avec un maximum de 3 jours pour éviter la propagation de données périmées.
+```
+macro_market_merged.csv
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│  ÉTAPE 1 — Prétraitement des Données        │
+│  ├─ Chargement & normalisation des colonnes │
+│  │   (suppression des accents, lowercase)   │
+│  ├─ Téléchargement EUR/TND via yfinance     │
+│  │   (Yahoo Finance : EURTND=X)             │
+│  ├─ Gestion des NaN :                       │
+│  │   forward-fill ≤ 5 jours (week-ends)     │
+│  ├─ Suppression des doublons d'index        │
+│  └─ Suppression des lignes NaN résiduelles  │
+└─────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ÉTAPE 2 — Feature Engineering                              │
+│                                                             │
+│  2.1 Lags (valeurs décalées)                                │
+│      Colonnes : EUR/TND, EUR/USD, Brent, Or, EUR/GBP,       │
+│                 US 10Y Yield, MSCI EM, Balance commerciale  │
+│      Décalages : lag1, lag3, lag7, lag30                    │
+│                                                             │
+│  2.2 Statistiques glissantes sur EUR/TND                    │
+│      Fenêtres : 7, 14, 30 jours                             │
+│      → Moyenne mobile (MA) & Écart-type (STD)               │
+│                                                             │
+│  2.3 Indicateurs de momentum & vélocité                     │
+│      → Variation absolue et relative jour-sur-jour          │
+│                                                             │
+│  2.4 Features calendaires                                   │
+│      → Jour de la semaine, mois, trimestre                  │
+│                                                             │
+│  2.5 Proxy DXY                                              │
+│      → dxy_proxy = 1 / EUR/USD                              │
+│                                                             │
+│  2.6 Sélection des features                                 │
+│      → Top 20 par corrélation de Pearson avec EUR/TND       │
+│                                                             │
+│  2.7 Normalisation (StandardScaler)                         │
+│      → Appliquée uniquement pour Ridge Regression           │
+└─────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌───────────────────────────────────────────────────────┐
+│  ÉTAPE 3 — Séparation Chronologique 80 / 20           │
+│  ├─ Entraînement : 2015 → ~2023  (80% des données)    │
+│  └─ Test         : ~2023 → 2025  (20% des données)    │
+│                                                       │
+│  ⚠️  Pas de mélange aléatoire (data leakage interdit) │
+└───────────────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────┐
+│  ÉTAPE 4 — Baseline Naïve (référence)      │
+│  └─ Prédiction : ŷ[t] = y[t-1]            │
+│     Établit le plancher de performance     │
+└────────────────────────────────────────────┘
+        │
+        ▼
+┌────────────────────────────────────────────────────────────┐
+│  ÉTAPE 5 — Entraînement & Comparaison des 4 Modèles        │
+│  ├─ Ridge Regression  (features standardisées, RidgeCV)    │
+│  ├─ Random Forest     (300 arbres, max_depth=10)            │
+│  ├─ XGBoost           (500 estimateurs, lr=0.03)            │
+│  └─ LightGBM          (500 estimateurs, lr=0.03)            │
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────┐
+│  ÉTAPE 6 — Évaluation & Analyse                     │
+│  ├─ Tableau comparatif MAE / RMSE / MAPE            │
+│  ├─ Graphiques Actual vs. Predicted (4 modèles)     │
+│  └─ Distribution des résidus par modèle             │
+└─────────────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│  ÉTAPE 7 — Optimisation des Hyperparamètres              │
+│  ├─ Méthode : RandomizedSearchCV (30 itérations)         │
+│  ├─ Validation : TimeSeriesSplit (5 folds chronologiques)│
+│  ├─ XGBoost  → grille sur 8 hyperparamètres              │
+│  └─ LightGBM → grille sur 9 hyperparamètres              │
+└──────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────┐
+│  ÉTAPE 8 — Importance des Features                       │
+│  └─ Top 20 features pour RF, XGBoost (opt.), LGBM (opt.) │
+└──────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────────────────────┐
+│  ÉTAPE 9 — Validation Walk-Forward (LightGBM optimisé)      │
+│  ├─ Fenêtre minimale d'entraînement : 3 ans                 │
+│  ├─ Pas d'avancement : 30 jours                             │
+│  ├─ Horizon de prédiction : 30 jours                        │
+│  └─ MAE glissante par fenêtre (graphique d'évolution)       │
+└─────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌──────────────────────────────────────────────────────────────┐
+│  ÉTAPE 10 — Prédiction du Lendemain                          │
+│  ├─ Réentraînement sur l'intégralité du dataset              │
+│  ├─ Prédiction ŷ[T+1]                                        │
+│  └─ Intervalles de confiance empiriques : 68% et 90%         │
+└──────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────┐
+│  ÉTAPE 11 — Bilan Final & Conclusions   │
+│  └─ Tableau récapitulatif tous modèles  │
+└─────────────────────────────────────────┘
+```
 
 ---
 
-## Pipeline
+##  Modèles Utilisés
 
-```
-Fichiers xlsx macro bruts (x4)
-           │
-           ▼
-  Étape 1 — Fusion et alignement des données macro
-  (index journalier commun, suppression des lignes incomplètes)
-           │
-           ▼
-  Étape 2 — Récupération des facteurs de marché yfinance
-  (réindexation calendrier journalier, ffill week-ends)
-           │
-           ▼
-  Étape 3 — Téléchargement de la cible EUR/TND + ingénierie des features
-  (décalages, stats glissantes, log-rendements, spreads, calendrier)
-           │
-           ▼
-  Étape 4 — Modèle XGBoost
-  (split 80/20 chronologique, évaluation vs. baseline naïf)
-           │
-           ├──► Étape 5A — Prévision J+1
-           │    (réentraînement sur toutes les données, estimation ponctuelle + IC)
-           │
-           └──► Étape 5B — Validation walk-forward
-                (84 fenêtres glissantes, décomposition annuelle)
-```
+### 1. Baseline Naïve
+La prédiction la plus simple possible : le taux de demain est égal au taux d'aujourd'hui (`ŷ[t] = y[t-1]`). Elle sert de **borne inférieure de performance** : tout modèle ML doit impérativement faire mieux pour être considéré comme utile.
+
+### 2. Ridge Regression
+Régression linéaire pénalisée par la norme L2 (`‖β‖²`). L'alpha optimal est sélectionné automatiquement par validation croisée (`RidgeCV`, alphas testés : `[0.01, 0.1, 1, 10, 100, 1000]`). Ce modèle nécessite une **standardisation** préalable des features (StandardScaler) et offre une excellente **interprétabilité** via l'inspection des coefficients. Il constitue le modèle linéaire de référence.
+
+### 3. Random Forest
+Forêt de 300 arbres de décision entraînés en parallèle par **bagging** (Bootstrap Aggregating). Hyperparamètres : `max_depth=10`, `min_samples_leaf=5`, `max_features=0.5`. Robuste aux valeurs aberrantes et aux corrélations entre features, il capture les **non-linéarités** sans nécessiter de normalisation des données.
+
+### 4. XGBoost
+500 arbres entraînés **séquentiellement** par gradient boosting, chaque arbre corrigeant les erreurs du précédent. Taux d'apprentissage de 0.03 pour un apprentissage progressif. Régularisation L1 (`reg_alpha=0.1`) et L2 (`reg_lambda=1.0`) pour éviter le surapprentissage. Sous-échantillonnage des lignes (`subsample=0.8`) et des colonnes (`colsample_bytree=0.8`). Référence de l'état de l'art sur les données tabulaires structurées.
+
+### 5. LightGBM
+Architecture de gradient boosting similaire à XGBoost mais avec une stratégie de croissance des arbres **par feuille** (*leaf-wise*) plutôt que par niveau (*level-wise*). Cela le rend significativement plus rapide tout en atteignant des performances équivalentes voire supérieures, notamment sur les datasets à grande dimensionnalité. **Retenu comme modèle final** après comparaison systématique.
 
 ---
 
-## Ingénierie des features
+## 🔬 Feature Engineering — Détail
 
-Un total de **69 features** sont construites à partir des 11 colonnes brutes. Tous les décalages et statistiques glissantes sont calculés sur des valeurs décalées pour éviter toute fuite de données (*data leakage*).
+### Variables sources (colonnes de base)
 
-### Features de décalage (lags)
+| Variable | Description |
+|---|---|
+| `eurtnd` | Taux EUR/TND — variable **cible** |
+| `eur_usd` | Taux de change Euro / Dollar américain |
+| `brent_oil` | Prix du pétrole Brent (USD/baril) |
+| `gold` | Prix de l'or (USD/once troy) |
+| `eur_gbp` | Taux Euro / Livre sterling |
+| `us_10y_yield` | Rendement des obligations du Trésor américain à 10 ans |
+| `msci_em` | Indice MSCI Marchés Émergents |
+| `balance_commerciale` | Balance commerciale tunisienne mensuelle |
 
-Appliquées à 8 colonnes (`eurtnd`, `eur_usd`, `brent_oil`, `gold`, `eur_gbp`, `us_10y_yield`, `msci_em`, `balance_commerciale`) :
+### Features construites
 
-- `{col}_lag1` — valeur d'hier
-- `{col}_lag3` — valeur d'il y a 3 jours
-- `{col}_lag7` — valeur d'il y a 1 semaine
-- `{col}_lag30` — valeur d'il y a 1 mois
+| Catégorie | Features générées | Rôle |
+|---|---|---|
+| **Lags** | `*_lag1`, `*_lag3`, `*_lag7`, `*_lag30` pour chaque colonne source | Capturer l'autocorrélation et les dépendances temporelles |
+| **Moyennes mobiles** | `eurtnd_ma7`, `eurtnd_ma14`, `eurtnd_ma30` | Représenter la tendance court et moyen terme |
+| **Volatilité glissante** | `eurtnd_std7`, `eurtnd_std14`, `eurtnd_std30` | Mesurer l'incertitude et la turbulence du marché |
+| **Momentum** | Variation absolue et relative J vs J-1 | Capturer l'accélération ou la décélération du taux |
+| **Calendrier** | Jour de la semaine, numéro du mois, trimestre | Saisonnalité et effets de calendrier |
+| **Proxy DXY** | `dxy_proxy = 1 / eur_usd` | Force relative du dollar américain |
 
-### Statistiques glissantes (sur EUR/TND, décalées)
-
-- `eurtnd_ma{7,14,30}` — moyenne mobile
-- `eurtnd_std{7,14,30}` — écart-type glissant
-
-### Log-rendements
-
-Appliqués à `eurtnd`, `eur_usd`, `brent_oil`, `gold`, `msci_em` :
-
-- `{col}_ret1` — log-rendement sur 1 jour
-- `{col}_ret7` — log-rendement sur 7 jours
-- `{col}_ret30` — log-rendement sur 30 jours
-
-### Features dérivées
-
-| Feature | Formule | Objectif |
-|---------|---------|----------|
-| `dxy_proxy` | `1 / eur_usd` | Substitut à l'indice dollar |
-| `rate_inflation_spread` | `taux_interet - inflation x 100` | Taux d'intérêt réel |
-| `eur_usd_ma30_dev` | `eur_usd - moyenne_glissante_30j` | Déviation EUR/USD par rapport à la tendance |
-| `day_of_week` | `index.dayofweek` | Saisonnalité hebdomadaire |
-| `month` | `index.month` | Saisonnalité mensuelle |
-| `quarter` | `index.quarter` | Saisonnalité trimestrielle |
-
-### Principales importances de features (XGBoost)
-
-| Feature | Importance | Groupe |
-|---------|-----------|--------|
-| `eurtnd_ma14` | 41,7% | Tendance |
-| `eurtnd_ma30` | 26,0% | Tendance |
-| `eurtnd_lag30` | 23,2% | Tendance |
-| `balance_commerciale_lag7` | 1,3% | Macro |
-| `balance_commerciale_lag30` | 1,3% | Macro |
-| `taux_interet` | 0,4% | Macro |
-| `brent_oil_lag1` | 0,1% | Marché |
-
-> L'EUR/TND est une devise gérée par la BCT. Le modèle apprend correctement que les features de tendance à moyen terme dominent, tandis que les facteurs de marché ont une influence mineure au jour le jour. Cela est cohérent avec un régime de flottement administré où la banque centrale lisse la volatilité.
+> Toutes les features de lags et statistiques glissantes sont calculées avec un décalage de 1 jour (`shift(1)`) afin d'**éviter tout data leakage** : le modèle ne dispose jamais d'informations du jour J lors de la prédiction de J.
 
 ---
 
-## Modèle
+##  Métriques d'Évaluation
 
-**Algorithme :** XGBoost Regressor
+| Métrique | Formule | Interprétation |
+|---|---|---|
+| **MAE** | `mean(|y - ŷ|)` | Erreur absolue moyenne en TND — la plus intuitive et robuste aux outliers |
+| **RMSE** | `sqrt(mean((y - ŷ)²))` | Pénalise davantage les grandes erreurs ; sensible aux pics d'erreur |
+| **MAPE** | `mean(|y - ŷ| / y) × 100` | Erreur relative en % — indépendante de l'échelle du taux |
+| **Δ MAE vs baseline** | `(1 - MAE_model / MAE_baseline) × 100` | Gain en % par rapport à la prédiction naïve |
 
-```python
-XGBRegressor(
-    n_estimators     = 500,
-    learning_rate    = 0.03,
-    max_depth        = 5,
-    subsample        = 0.8,
-    colsample_bytree = 0.8,
-    min_child_weight = 5,
-    reg_alpha        = 0.1,   # Régularisation L1
-    reg_lambda       = 1.0,   # Régularisation L2
-    random_state     = 42,
-)
-```
-
-**Découpage train/test :** split chronologique strict 80/20. Le mélange aléatoire n'est jamais utilisé — il provoquerait une fuite de données sur une série temporelle.
-
-**Intervalles de confiance** pour la prévision J+1 sont dérivés empiriquement de la distribution des résidus sur l'ensemble de test :
-
-- IC 68% : [16e percentile, 84e percentile] des résidus
-- IC 90% : [5e percentile, 95e percentile] des résidus
+La **MAE est la métrique principale** de sélection des modèles car elle est directement interprétable en dinars tunisiens et robuste aux valeurs extrêmes.
 
 ---
 
-## Validation walk-forward
+##  Résultats & Comparaison
 
-La validation walk-forward simule un déploiement en conditions réelles en réentraînant le modèle de zéro à chaque étape en utilisant uniquement les données passées, puis en prédisant les 30 jours suivants.
+Le tableau suivant présente les performances de tous les modèles, avant et après optimisation des hyperparamètres :
 
-```
-|--- entraînement (3 ans min.) ---|-- prédiction (30j) --|
-       |--- entraînement + 30j ---|-- prédiction (30j) --|
-              |--- entraînement + 60j ---|-- prédiction (30j) --|
-              ...
-```
+| Modèle | MAE (TND) | RMSE (TND) | MAPE (%) | Δ vs Baseline |
+|---|---|---|---|---|
+| Baseline naïve | référence | référence | référence | 0 % |
+| Ridge Regression | faible amélioration | — | — | faible gain |
+| Random Forest | amélioration modérée | — | — | gain modéré |
+| XGBoost | forte amélioration | — | — | fort gain |
+| XGBoost (optimisé) | meilleure | — | — | gain additionnel |
+| LightGBM | forte amélioration | — | — | fort gain |
+| **LightGBM (optimisé)** | **meilleure** | **meilleure** | **meilleure** | **gain maximal** |
 
-**Configuration :**
+> Les valeurs numériques exactes sont affichées dans la cellule 35 du notebook (`BILAN COMPLET — TOUS LES MODÈLES`). Les résultats dépendent de la date d'exécution car les données EUR/TND sont téléchargées en temps réel.
 
-| Paramètre | Valeur |
-|-----------|--------|
-| Fenêtre d'entraînement minimale | 3 ans (1 095 jours) |
-| Pas d'avancement | 30 jours |
-| Horizon de prévision | 30 jours par fenêtre |
-| Nombre total de fenêtres | 84 |
-
-Cette approche est plus conservative et honnête qu'un simple split train/test car elle teste le modèle sur chaque période en séquence, y compris les changements de régime (choc COVID-19 en 2020, cycle de hausse des taux BCT 2022–2023).
+**Conclusion principale :** Les modèles ensemblistes (XGBoost, LightGBM) surpassent significativement la baseline naïve et la régression Ridge. LightGBM optimisé est systématiquement le plus performant et est sélectionné comme modèle de production.
 
 ---
 
-## Comment exécuter
+##  Importance des Features
+
+D'après l'analyse comparée des importances des trois modèles à base d'arbres (Random Forest, XGBoost optimisé, LightGBM optimisé) :
+
+**Tier 1 — Très haute importance**
+- `eurtnd_lag1`, `eurtnd_lag3`, `eurtnd_lag7` — La série EUR/TND présente une **forte autocorrélation** : le passé récent est le meilleur prédicteur du futur proche.
+- `eurtnd_ma7`, `eurtnd_ma14` — Les moyennes mobiles capturent la **tendance court-terme** et lissent le bruit quotidien.
+
+**Tier 2 — Haute importance**
+- `eur_usd` et ses lags — Principal déterminant de la force de l'Euro face aux devises émergentes.
+- `brent_oil` et ses lags — La Tunisie étant importatrice nette d'énergie, le prix du pétrole impacte directement la balance des paiements et la demande en devises étrangères.
+- `gold` — Indicateur de l'appétit mondial pour le risque : une hausse de l'or signale généralement une fuite vers les valeurs refuge et affecte les devises émergentes.
+
+**Tier 3 — Importance modérée**
+- `us_10y_yield` — Proxy de l'aversion au risque global et des flux de capitaux vers les marchés émergents (effet de carry trade).
+- `eur_gbp` — Indicateur indirect de la santé économique de la zone Euro.
+- `msci_em` — Contexte des marchés émergents ; le TND suit parfois les tendances de cette classe d'actifs.
+- `balance_commerciale` — Impact plus marqué à moyen terme qu'à court terme sur le taux de change.
+
+---
+
+##  Hyperparamètres Optimisés
+
+### Grille de recherche XGBoost
+
+| Hyperparamètre | Valeurs testées | Rôle |
+|---|---|---|
+| `n_estimators` | 200, 300, 500, 700 | Nombre d'arbres |
+| `learning_rate` | 0.01, 0.03, 0.05, 0.1 | Taux d'apprentissage (shrinkage) |
+| `max_depth` | 3, 4, 5, 6 | Profondeur maximale de chaque arbre |
+| `subsample` | 0.6, 0.7, 0.8, 0.9 | Fraction des observations par arbre |
+| `colsample_bytree` | 0.6, 0.7, 0.8, 0.9 | Fraction des features par arbre |
+| `min_child_weight` | 3, 5, 7, 10 | Poids minimum dans un noeud feuille |
+| `reg_alpha` | 0.0, 0.05, 0.1, 0.5 | Régularisation L1 |
+| `reg_lambda` | 0.5, 1.0, 2.0, 5.0 | Régularisation L2 |
+
+### Grille de recherche LightGBM
+
+| Hyperparamètre | Valeurs testées | Rôle |
+|---|---|---|
+| `n_estimators` | 200, 300, 500, 700 | Nombre d'arbres |
+| `learning_rate` | 0.01, 0.03, 0.05, 0.1 | Taux d'apprentissage |
+| `num_leaves` | 15, 31, 63, 127 | Nombre de feuilles par arbre (complexité) |
+| `max_depth` | -1, 5, 8, 12 | Profondeur max (-1 = illimitée) |
+| `min_child_samples` | 10, 20, 40 | Nb min d'observations par feuille |
+| `subsample` | 0.6, 0.7, 0.8, 0.9 | Sous-échantillonnage des lignes |
+| `colsample_bytree` | 0.6, 0.7, 0.8, 0.9 | Sous-échantillonnage des colonnes |
+| `reg_alpha` | 0.0, 0.05, 0.1, 0.5 | Régularisation L1 |
+| `reg_lambda` | 0.5, 1.0, 2.0, 5.0 | Régularisation L2 |
+
+> **Méthode :** `RandomizedSearchCV` avec 30 tirages aléatoires. Validation croisée avec `TimeSeriesSplit(n_splits=5)`. Scoring : MAE négative (`neg_mean_absolute_error`).
+
+---
+
+##  Validation Walk-Forward
+
+La validation walk-forward simule les **conditions réelles de déploiement** du modèle en production :
+
+```
+Itération 1 :
+|←─────────────── Train (≥ 3 ans) ───────────────→|←─ Test 30j ─→|
+
+Itération 2 (avance de 30 jours) :
+|←──────────────── Train (≥ 3 ans + 30j) ─────────────────→|←─ Test 30j ─→|
+
+Itération 3 :
+|←─────────────────── Train (≥ 3 ans + 60j) ─────────────────────→|←─ Test 30j ─→|
+
+... (répété jusqu'à la fin du dataset)
+```
+
+À chaque itération, le modèle LightGBM est **réentraîné de zéro** sur tout l'historique disponible, puis évalué sur les 30 jours suivants. Cette approche :
+- Évite le biais d'optimisme lié à une évaluation statique unique
+- Fournit une **distribution de MAE par fenêtre temporelle** permettant d'identifier les périodes de marché difficiles (crises, ruptures structurelles)
+- Reflète fidèlement ce que l'on observerait en production réelle
+
+---
+
+##  Prédiction du Lendemain
+
+Le modèle final (LightGBM réentraîné sur l'intégralité du dataset 2015–2025) produit :
+
+- **ŷ[T+1]** — le taux EUR/TND prédit pour le lendemain
+- **IC 68%** — intervalle de confiance basé sur les percentiles 16 et 84 des résidus du test
+- **IC 90%** — intervalle de confiance basé sur les percentiles 5 et 95 des résidus du test
+
+Les intervalles sont calculés de façon **empirique et non paramétrique** à partir de la distribution des erreurs observées sur l'ensemble de test. Cette approche est robuste à la non-normalité des résidus, fréquente sur les séries financières (queues épaisses, asymétrie).
+
+---
+
+##  Décisions Méthodologiques Clés
+
+**Pourquoi pas de split aléatoire ?**
+Un split aléatoire sur une série temporelle introduit du **data leakage** : des observations futures contaminent l'ensemble d'entraînement, ce qui gonfle artificiellement les performances et donne une vision irréaliste de la capacité prédictive. On utilise systématiquement une **séparation chronologique stricte** (les données de test sont toujours postérieures aux données d'entraînement).
+
+**Pourquoi TimeSeriesSplit pour la validation croisée ?**
+Le k-fold classique mélange les observations dans le temps, violant la causalité. `TimeSeriesSplit` garantit que chaque fold de validation est toujours **postérieur** au fold d'entraînement, ce qui donne une estimation non biaisée de la performance hors-échantillon.
+
+**Pourquoi standardiser uniquement pour Ridge ?**
+Ridge Regression est sensible à l'échelle des features car le terme de pénalisation L2 traite toutes les features de manière identique sans tenir compte de leur magnitude. Les modèles à base d'arbres (Random Forest, XGBoost, LightGBM) sont **invariants par rapport à la mise à l'échelle** des features et n'en ont pas besoin.
+
+**Pourquoi un forward-fill limité à 5 jours ?**
+Les marchés financiers sont fermés le week-end et certains jours fériés. Un forward-fill limité à 5 jours permet de propager la dernière valeur connue sur ces jours de fermeture sans risque de combler de véritables trous de données (une limite de 5 jours couvre un week-end + quelques jours fériés consécutifs au maximum).
+
+---
+
+##  Limites & Perspectives
+
+### Limites actuelles
+
+- **Régimes de crise :** Le modèle est entraîné sur une période incluant la pandémie COVID-19 (2020) et la forte dépréciation du TND (2022). Ces épisodes de rupture structurelle peuvent réduire la stabilité des prédictions sur des crises futures inédites.
+- **Horizon court :** La performance se dégrade rapidement au-delà de T+1. Le modèle n'est pas conçu pour des prévisions multi-jours ou multi-semaines.
+- **Données absentes :** Le modèle n'intègre pas les données de sentiment de marché (NLP sur flux d'actualités), les décisions de politique monétaire de la BCT ou de la BCE, ni les données politiques et géopolitiques.
+- **Stationnarité implicite :** Aucun test formel de stationnarité (ADF, KPSS) n'est appliqué ; les lags et différences jouent implicitement ce rôle mais sans garantie.
+- **Données en temps réel :** Les résultats numériques exacts varient selon la date d'exécution car les données EUR/TND sont téléchargées dynamiquement.
+
+### Pistes d'amélioration
+
+- Tester des architectures spécialisées en séries temporelles : ARIMAX, Prophet, N-BEATS, Temporal Fusion Transformer (TFT)
+- Intégrer des features de **sentiment de marché** via l'analyse NLP de tweets financiers ou d'articles de presse économique
+- Expérimenter le **stacking / blending** des quatre modèles pour réduire la variance de prédiction
+- Ajouter une composante de **détection de changement de régime** (Hidden Markov Model, CUSUM)
+- Déployer le modèle final via une **API REST** (FastAPI + MLflow) pour des prédictions automatisées en temps réel
+
+---
+
+##  Installation & Exécution
+
+### Prérequis
+
+- Python ≥ 3.9
+- Jupyter Notebook ou JupyterLab
+- Connexion Internet (pour le téléchargement des données via `yfinance`)
 
 ### Installation des dépendances
 
 ```bash
-pip install yfinance xgboost scikit-learn pandas numpy matplotlib openpyxl
+pip install pandas numpy matplotlib seaborn scikit-learn xgboost lightgbm yfinance
 ```
 
-### Sur Google Colab
+Ou via un fichier `requirements.txt` :
 
-1. Uploader `macro_merged.xlsx` (sortie de l'étape 1) dans le panneau de fichiers Colab
-2. Exécuter chaque étape dans l'ordre :
-
-```python
-# Étape 2 — récupération des données de marché
-exec(open('step2_yfinance_merge_fixed.py').read())
-
-# Étape 3 — ajout de la cible + features
-exec(open('step3_target_features_fixed.py').read())
-
-# Étape 4 — entraînement du modèle
-exec(open('step4_model.py').read())
-
-# Étape 5A — prévision J+1
-exec(open('step5a_predict_tomorrow.py').read())
-
-# Étape 5B — validation walk-forward
-exec(open('step5b_walkforward.py').read())
+```txt
+pandas>=1.5.0
+numpy>=1.23.0
+matplotlib>=3.6.0
+seaborn>=0.12.0
+scikit-learn>=1.2.0
+xgboost>=1.7.0
+lightgbm>=3.3.0
+yfinance>=0.2.0
 ```
 
-### Durées d'exécution estimées
+```bash
+pip install -r requirements.txt
+```
 
-| Étape | Durée |
-|-------|-------|
-| Étape 2 — téléchargement yfinance | ~30 secondes |
-| Étape 3 — ingénierie des features | ~5 secondes |
-| Étape 4 — entraînement XGBoost | ~20 secondes |
-| Étape 5A — prévision J+1 | ~25 secondes |
-| Étape 5B — walk-forward (84 fenêtres) | ~2 minutes |
+### Ordre d'exécution
+
+```bash
+# Étape 1 — Analyse exploratoire (génère macro_market_merged.csv)
+jupyter notebook 01_EDA.ipynb
+
+# Étape 2 — Modélisation complète
+jupyter notebook 02_Modeling.ipynb
+```
+
+>  **Important :** La cellule 1.1 télécharge le taux EUR/TND en temps réel via Yahoo Finance (`EURTND=X`). Une connexion Internet est indispensable. Les données sont récupérées du `2015-01-01` au `2025-01-02`.
+
+### Temps d'exécution estimé
+
+| Étape | Durée estimée |
+|---|---|
+| Chargement & Feature Engineering | ~30 secondes |
+| Random Forest (300 arbres) | ~1–2 minutes |
+| XGBoost (500 estimateurs) | ~1 minute |
+| LightGBM (500 estimateurs) | ~30 secondes |
+| RandomizedSearchCV XGBoost (30 iter.) | ~3–5 minutes |
+| RandomizedSearchCV LightGBM (30 iter.) | ~2–4 minutes |
+| Validation Walk-Forward | ~2–3 minutes |
+| **Total estimé** | **~12–20 minutes** |
 
 ---
 
-## Fichiers générés
+##  Licence
 
-| Fichier | Description |
-|---------|-------------|
-| `macro_merged.xlsx` | 3 654 lignes x 4 colonnes macro, 2015–2025 |
-| `macro_market_merged.csv` | 3 653 lignes x 10 colonnes (macro + marché) |
-| `dataset_features.csv` | 3 622 lignes x 70 colonnes (toutes les features + cible) |
-| `predictions.csv` | Prédictions sur l'ensemble de test avec résidus |
-| `forecast_tomorrow.csv` | Estimation ponctuelle + IC 68% et 90% pour J+1 |
-| `walkforward_predictions.csv` | Toutes les valeurs prédites vs réelles en walk-forward |
-| `walkforward_yearly.csv` | MAE et MAPE par année |
-| `model_results.png` | Réel vs prédit, résidus, importance des features |
-| `forecast_tomorrow.png` | Fenêtre des 90 derniers jours + prévision J+1 |
-| `walkforward_results.png` | Réel vs prédit en walk-forward + MAE glissant |
-
----
-
-## Interprétation et limites
-
-### Points forts du modèle
-
-- **Capture la tendance de dépréciation administrée** — l'EUR/TND s'est déprécié régulièrement de ~2,20 en 2015 à ~3,30 en 2025. Le modèle apprend cette dérive structurelle via les moyennes mobiles à moyen terme.
-- **Performance stable après 2020** — une fois entraîné sur plus de 5 ans de données, le MAPE walk-forward reste inférieur à 0,16% chaque année, y compris pendant le cycle de hausse des taux BCT 2022–2023.
-- **Amélioration continue** — 2024 est la meilleure année de l'historique walk-forward (MAPE 0,07%), montrant que le modèle bénéficie d'un historique plus long plutôt que de se dégrader avec le temps.
-
-### Limites
-
-- **Interventions ponctuelles de la BCT** — les dépréciations soudaines décidées par la banque centrale ne sont pas prévisibles à partir des données passées seules. Le modèle rattrapera l'écart en 1 à 3 jours après un tel événement.
-- **Période de démarrage à froid** — le modèle nécessite au minimum 4 à 5 ans de données d'entraînement pour une performance fiable. Ne pas utiliser les prédictions des 3 premières années d'un nouveau déploiement comme référence de qualité.
-- **Chocs exogènes** — les événements géopolitiques (crise constitutionnelle tunisienne de 2021, négociations FMI) ne sont pas encodés dans les features et augmenteront temporairement l'erreur de prédiction.
-- **Fraîcheur des données macro** — les variables macroéconomiques sont publiées avec un délai par l'INS/BCT. En production, elles doivent être maintenues à jour avec la dernière publication disponible.
-- **Ce projet n'est pas un conseil financier** — le modèle est un outil de recherche et d'analyse. Il ne doit pas être utilisé comme seule base pour des décisions de trading ou financières.
-
----
-
-## Dépendances
-
-```
-python       >= 3.10
-pandas       >= 2.0
-numpy        >= 1.24
-xgboost      >= 2.0
-scikit-learn >= 1.3
-yfinance     >= 0.2.36
-matplotlib   >= 3.7
-openpyxl     >= 3.1
-```
-
----
-
-## Auteur
-
-Projet de recherche macroéconomique combinant les données macro tunisiennes BCT/INS avec des signaux de marché financier internationaux pour modéliser la dynamique du taux de change EUR/TND.
-
-Plage de données : **01/01/2015 → 01/01/2025** | Dataset final : **3 622 lignes x 70 features** 
+Ce projet a été développé dans un cadre académique. Les données sont issues d'APIs financières publiques (Yahoo Finance). Aucune utilisation commerciale n'est autorisée sans accord préalable des auteurs.
